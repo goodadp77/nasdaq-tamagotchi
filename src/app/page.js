@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { auth, provider, db } from "../firebase"; 
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { collection, addDoc, query, where, onSnapshot, deleteDoc, doc, orderBy } from "firebase/firestore";
+import { collection, addDoc, query, where, onSnapshot, deleteDoc, doc, updateDoc, orderBy } from "firebase/firestore";
 
 export default function Home() {
   const [user, setUser] = useState(null);
@@ -12,8 +12,12 @@ export default function Home() {
   const [symbol, setSymbol] = useState("TQQQ"); 
   const [seedMoney, setSeedMoney] = useState(10000000); 
   
-  // 2. 정산 데이터 (매수/매도 내역)
+  // 2. 정산 데이터
   const [tradeHistory, setTradeHistory] = useState([]);
+  
+  // 3. 수정 모드 상태 (어떤 녀석을 수정 중인지)
+  const [editingId, setEditingId] = useState(null);
+  const [editPrice, setEditPrice] = useState(""); // 체결가 입력용
 
   // --- [관리자(Admin) 설정: 시장 상태별 템플릿] ---
   const marketTemplates = {
@@ -23,7 +27,6 @@ export default function Home() {
       icon: "🥶",
       color: "#fd7e14",
       desc: "지하실이 있을 수 있습니다. 초반은 정찰병만 보내고(4%), 9~10차에 승부를 거세요.",
-      // 10분할, 후반 집중형 배열
       ratios: [4, 4, 4, 8, 8, 8, 12, 12, 20, 20] 
     },
     "주의": {
@@ -32,12 +35,10 @@ export default function Home() {
       icon: "🤔",
       color: "#fcc419",
       desc: "방향성이 모호합니다. 8분할로 넓게 그물을 치세요.",
-      // 8분할, 중반 비중 확대
       ratios: [8, 8, 12, 12, 12, 16, 16, 16]
     }
   };
 
-  // 현재 적용된 시장 상태
   const currentMarket = marketTemplates["공포"];
 
   // --- [Firebase 연동] ---
@@ -67,7 +68,7 @@ export default function Home() {
   const handleLogin = async () => { try { await signInWithPopup(auth, provider); } catch (e) {} };
   const handleLogout = () => { signOut(auth); };
 
-  // --- [핵심 기능 1: 계산기 로직] ---
+  // --- [계산 엔진] ---
   const generatePlan = () => {
     const plan = [];
     const ratios = currentMarket.ratios;
@@ -94,16 +95,16 @@ export default function Home() {
 
   const buyPlan = generatePlan();
 
-  // --- [핵심 기능 2: 체크박스 연동 (A안)] ---
+  // --- [액션: 체크박스 저장] ---
   const toggleExecution = async (planItem) => {
     if (!user) { alert("로그인이 필요한 기능입니다."); return; }
 
     if (planItem.isExecuted) {
-      alert("이미 정산 내역에 등록된 회차입니다. 취소하려면 아래 정산표에서 삭제하세요.");
+      alert("이미 정산 내역에 등록된 회차입니다.");
       return;
     }
 
-    if (confirm(`${symbol} ${planItem.turn}회차 매수 기록을 정산에 등록하시겠습니까?`)) {
+    if (confirm(`${symbol} ${planItem.turn}회차 매수 기록을 등록하시겠습니까?`)) {
       try {
         await addDoc(collection(db, "trades"), {
           uid: user.uid,
@@ -111,27 +112,54 @@ export default function Home() {
           type: "buy", 
           round: planItem.turn,
           amount: Math.floor(planItem.amount), 
-          price: 0, 
-          qty: 0,   
+          price: 0, // 아직 모름 (나중에 입력)
+          qty: 0,   // 아직 모름
           date: new Date().toISOString(),
           memo: "자동등록됨"
         });
       } catch (e) {
         console.error("저장 실패", e);
-        alert("저장 중 오류가 발생했습니다.");
+        alert("저장 오류");
       }
     }
   };
 
+  // --- [액션: 삭제] ---
   const deleteTrade = async (id) => {
-    if (confirm("이 내역을 삭제하시겠습니까?")) {
-      await deleteDoc(doc(db, "trades", id));
-    }
+    if (confirm("삭제하시겠습니까?")) await deleteDoc(doc(db, "trades", id));
   };
 
-  const totalBuy = tradeHistory.filter(t => t.type === 'buy').reduce((acc, cur) => acc + cur.amount, 0);
+  // --- [액션: 수정 시작] ---
+  const startEdit = (trade) => {
+    setEditingId(trade.id);
+    setEditPrice(trade.price === 0 ? "" : trade.price); // 0원이면 빈칸으로
+  };
 
-  if (loading) return <div style={styles.loading}>⏳ 시스템 로딩 중...</div>;
+  // --- [액션: 수정 저장 (체결가 입력)] ---
+  const saveEdit = async (trade) => {
+    if (!editPrice || isNaN(editPrice)) {
+      alert("올바른 체결가를 입력해주세요.");
+      return;
+    }
+    
+    const priceNum = Number(editPrice);
+    const calculatedQty = priceNum > 0 ? trade.amount / priceNum : 0; // 수량 자동 계산
+
+    await updateDoc(doc(db, "trades", trade.id), {
+      price: priceNum,
+      qty: calculatedQty
+    });
+
+    setEditingId(null); // 수정 모드 종료
+  };
+
+  // --- [통계 계산: 평단가] ---
+  const myTrades = tradeHistory.filter(t => t.symbol === symbol && t.type === 'buy');
+  const totalInvested = myTrades.reduce((acc, cur) => acc + cur.amount, 0); // 총 투자금
+  const totalQty = myTrades.reduce((acc, cur) => acc + (cur.qty || 0), 0); // 총 수량
+  const avgPrice = totalQty > 0 ? totalInvested / totalQty : 0; // 평단가
+
+  if (loading) return <div style={styles.loading}>⏳ 로딩 중...</div>;
 
   return (
     <div style={styles.container}>
@@ -142,16 +170,14 @@ export default function Home() {
               : <button onClick={handleLogin} style={styles.loginBtn}>로그인</button>}
       </div>
 
-      {/* [A] 상단: 시장 상태 카드 */}
+      {/* 시장 상태 */}
       <div style={{...styles.heroCard, borderColor: currentMarket.color}}>
         <div style={{fontSize: 50, marginBottom:10}}>{currentMarket.icon}</div>
         <div style={{color: currentMarket.color, fontWeight:'bold', fontSize:20}}>{currentMarket.status}</div>
-        <div style={styles.descBox}>
-           💡 <strong>전략 가이드:</strong> {currentMarket.desc}
-        </div>
+        <div style={styles.descBox}>💡 {currentMarket.desc}</div>
       </div>
 
-      {/* [B] 중단: 분할매수 계산기 */}
+      {/* 계산기 */}
       <div style={styles.section}>
         <div style={styles.sectionHeader}>
             <h3>🧮 전략 계산기</h3>
@@ -168,15 +194,11 @@ export default function Home() {
             <input 
                 type="text" 
                 value={seedMoney.toLocaleString()} 
-                onChange={(e) => {
-                   const val = e.target.value.replaceAll(',', '');
-                   if(!isNaN(val)) setSeedMoney(Number(val));
-                }}
+                onChange={(e) => { const val = e.target.value.replaceAll(',', ''); if(!isNaN(val)) setSeedMoney(Number(val)); }}
                 style={styles.input}
             />
         </div>
 
-        {/* 회차 리스트 */}
         <div style={styles.listContainer}>
             <div style={styles.listHeader}>
                 <div style={{flex:1}}>실행</div>
@@ -192,15 +214,11 @@ export default function Home() {
                             type="checkbox" 
                             checked={plan.isExecuted} 
                             onChange={() => toggleExecution(plan)}
-                            style={{cursor:'pointer', width:18, height:18}}
+                            style={{cursor: 'pointer', width: '20px', height: '20px', accentColor: '#30d158'}}
                         />
                     </div>
-                    <div style={{flex:1, color: plan.isExecuted ? '#666' : 'white'}}>
-                        {plan.turn}차
-                    </div>
-                    <div style={{flex:1, fontSize:12, color:'#888'}}>
-                        {plan.percent}%
-                    </div>
+                    <div style={{flex:1, color: plan.isExecuted ? '#666' : 'white'}}>{plan.turn}차</div>
+                    <div style={{flex:1, fontSize:12, color:'#888'}}>{plan.percent}%</div>
                     <div style={{flex:2, textAlign:'right', fontWeight:'bold', color: plan.isExecuted ? '#666' : 'white'}}>
                         {Math.floor(plan.amount).toLocaleString()}
                     </div>
@@ -209,44 +227,71 @@ export default function Home() {
         </div>
       </div>
 
-      {/* [C] 하단: 정산 시스템 */}
+      {/* 정산 시스템 (평단가 추가) */}
       <div style={styles.section}>
         <div style={styles.sectionHeader}>
-            <h3>💰 내 정산 내역 (ERP)</h3>
-            {!user && <span style={{fontSize:12, color:'#ff6b6b'}}>로그인 필요</span>}
+            <h3>💰 {symbol} 정산 내역 (ERP)</h3>
         </div>
 
         {user ? (
             <>
                 <div style={styles.summaryBox}>
-                    <span>총 매수 운영금</span>
-                    <span style={{fontSize:18, fontWeight:'bold', color:'#30d158'}}>
-                        {totalBuy.toLocaleString()} 원
-                    </span>
+                    <div style={{textAlign:'center', width:'100%'}}>
+                        <div style={{fontSize:12, color:'#888', marginBottom:5}}>나의 {symbol} 평단가</div>
+                        <div style={{fontSize:24, fontWeight:'bold', color:'#30d158'}}>
+                            {avgPrice > 0 ? avgPrice.toLocaleString(undefined, {maximumFractionDigits: 2}) : "-"} <span style={{fontSize:14, color:'#aaa'}}>원/$</span>
+                        </div>
+                        <div style={{fontSize:12, color:'#666', marginTop:5}}>
+                            총 {totalQty.toFixed(4)}주 / {totalInvested.toLocaleString()}원 매수
+                        </div>
+                    </div>
                 </div>
 
                 <div style={styles.historyList}>
                     {tradeHistory.length === 0 ? (
-                        <p style={{textAlign:'center', color:'#666', padding:20}}>
-                            위 계산기에서 체크(✅)하면<br/>자동으로 여기에 기록됩니다.
-                        </p>
+                        <p style={{textAlign:'center', color:'#666', padding:20}}>체크박스를 누르면 여기에 기록됩니다.</p>
                     ) : (
                         tradeHistory.map((trade) => (
                             <div key={trade.id} style={styles.historyItem}>
-                                <div style={{display:'flex', justifyContent:'space-between', marginBottom:5}}>
-                                    <span style={{fontWeight:'bold', color:'white'}}>
+                                <div style={{display:'flex', justifyContent:'space-between', marginBottom:8}}>
+                                    <span style={{fontWeight:'bold', color:'white', fontSize:14}}>
                                         {trade.symbol} {trade.round}차
                                     </span>
                                     <span style={{fontSize:12, color:'#888'}}>
                                         {new Date(trade.date).toLocaleDateString()}
                                     </span>
                                 </div>
-                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                                    <span style={{color:'#ccc'}}>
-                                        {trade.amount.toLocaleString()} 원
-                                    </span>
-                                    <button onClick={() => deleteTrade(trade.id)} style={styles.delBtn}>삭제</button>
-                                </div>
+                                
+                                {editingId === trade.id ? (
+                                    // [수정 모드]
+                                    <div style={{display:'flex', gap:5, alignItems:'center'}}>
+                                        <input 
+                                            type="number" 
+                                            placeholder="체결가격 입력"
+                                            value={editPrice}
+                                            onChange={(e) => setEditPrice(e.target.value)}
+                                            style={styles.inputEdit}
+                                            autoFocus
+                                        />
+                                        <button onClick={() => saveEdit(trade)} style={styles.saveBtn}>저장</button>
+                                        <button onClick={() => setEditingId(null)} style={styles.cancelBtn}>취소</button>
+                                    </div>
+                                ) : (
+                                    // [조회 모드]
+                                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                                        <div>
+                                            <div style={{color:'#ccc', fontSize:14}}>{trade.amount.toLocaleString()}원</div>
+                                            <div style={{color:'#666', fontSize:12}}>
+                                                {trade.price > 0 ? `@ ${trade.price.toLocaleString()}` : "체결가 입력 필요"} 
+                                                {trade.qty > 0 && ` (${trade.qty.toFixed(2)}주)`}
+                                            </div>
+                                        </div>
+                                        <div style={{display:'flex', gap:5}}>
+                                            <button onClick={() => startEdit(trade)} style={styles.editBtn}>입력</button>
+                                            <button onClick={() => deleteTrade(trade.id)} style={styles.delBtn}>삭제</button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ))
                     )}
@@ -267,7 +312,7 @@ export default function Home() {
   );
 }
 
-// 스타일 정의 (여기가 안 짤리게 주의해서 복사해주세요!)
+// 스타일
 const styles = {
   container: { maxWidth: '480px', margin: '0 auto', padding: '20px', backgroundColor: '#000000', color: 'white', minHeight: '100vh', fontFamily: '-apple-system, sans-serif' },
   loading: { display:'flex', justifyContent:'center', alignItems:'center', height:'100vh', backgroundColor:'#000', color:'white' },
@@ -293,10 +338,15 @@ const styles = {
   row: { display:'flex', alignItems:'center', padding:'12px 0', borderBottom:'1px solid #2c2c2e', fontSize:14 },
   rowExecuted: { display:'flex', alignItems:'center', padding:'12px 0', borderBottom:'1px solid #2c2c2e', fontSize:14, opacity: 0.5, textDecoration:'line-through' },
 
-  summaryBox: { display:'flex', justifyContent:'space-between', alignItems:'center', backgroundColor:'#000', padding:15, borderRadius:10, marginBottom:15 },
-  historyList: { maxHeight:'300px', overflowY:'auto' },
-  historyItem: { backgroundColor:'#2c2c2e', padding:12, borderRadius:8, marginBottom:8 },
-  delBtn: { padding:'4px 8px', backgroundColor:'#ff453a', color:'white', border:'none', borderRadius:4, fontSize:11, cursor:'pointer' },
+  summaryBox: { display:'flex', justifyContent:'center', alignItems:'center', backgroundColor:'#000', padding:20, borderRadius:10, marginBottom:15 },
+  historyList: { maxHeight:'350px', overflowY:'auto' },
+  historyItem: { backgroundColor:'#2c2c2e', padding:15, borderRadius:8, marginBottom:8 },
+  
+  delBtn: { padding:'5px 10px', backgroundColor:'#ff453a', color:'white', border:'none', borderRadius:4, fontSize:12, cursor:'pointer' },
+  editBtn: { padding:'5px 10px', backgroundColor:'#4285F4', color:'white', border:'none', borderRadius:4, fontSize:12, cursor:'pointer' },
+  saveBtn: { padding:'8px 12px', backgroundColor:'#30d158', color:'black', border:'none', borderRadius:4, fontSize:12, cursor:'pointer', fontWeight:'bold' },
+  cancelBtn: { padding:'8px 12px', backgroundColor:'#333', color:'white', border:'none', borderRadius:4, fontSize:12, cursor:'pointer' },
+  inputEdit: { padding:8, borderRadius:4, border:'none', width:'100px', marginRight:5 },
 
   loginBlur: { textAlign:'center', padding:20, opacity:0.7 },
   ctaBtnSmall: { marginTop:10, padding:'8px 16px', backgroundColor:'#4285F4', color:'white', border:'none', borderRadius:6, cursor:'pointer' }
