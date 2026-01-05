@@ -4,6 +4,8 @@ import { auth, provider, db } from "../firebase";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { collection, addDoc, query, where, onSnapshot, deleteDoc, doc, updateDoc, orderBy } from "firebase/firestore";
 
+
+
 // --- [컴포넌트 1: 시장 상황 게이지] ---
 const MarketGauge = ({ status, emoji, theme }) => {
   const statusScore = { "공포 (Fear)": 30, "주의 (Caution)": 50 };
