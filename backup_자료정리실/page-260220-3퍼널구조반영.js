@@ -95,11 +95,11 @@ const TopNav = ({ user, handleLogin, handleLogout, theme }) => {
 
       {isMenuOpen && (
         <div style={{ position: 'absolute', top: '60px', right: '20px', width: '200px', backgroundColor: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <div onClick={() => window.location.href='/'} style={{ padding: '12px 15px', borderBottom: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.text, fontWeight: 'bold' }}>🏠 홈 (분할계산기)</div>
-          <div onClick={() => window.location.href='/stocklab'} style={{ padding: '12px 15px', borderBottom: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.text }}>🔍 종목탐구 LAB</div>
+          <div style={{ padding: '12px 15px', borderBottom: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.text, fontWeight: 'bold' }}>🏠 홈 (분할계산기)</div>
+          <div style={{ padding: '12px 15px', borderBottom: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.text }}>📊 데이터 랩 (노션)</div>
           <div style={{ padding: '12px 15px', borderBottom: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.text }}>💎 PRO 등급 안내</div>
           <div style={{ padding: '12px 15px', borderBottom: `1px solid ${theme.border}`, cursor: 'pointer', color: theme.text }}>⚙️ 마이페이지</div>
-          <div onClick={() => window.location.href='/admin'} style={{ padding: '12px 15px', cursor: 'pointer', color: theme.subText, fontSize: 12 }}>🔒 어드민 센터</div>
+          <div style={{ padding: '12px 15px', cursor: 'pointer', color: theme.subText, fontSize: 12 }}>🔒 어드민 (관리자용)</div>
         </div>
       )}
     </div>
@@ -109,7 +109,7 @@ const TopNav = ({ user, handleLogin, handleLogout, theme }) => {
 export default function Home() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [userTier, setUserTier] = useState("FREE"); 
+  const [userTier, setUserTier] = useState("FREE"); // 🟢 유저 등급 상태 추가
   const theme = { bg: "#F2F2F7", card: "#FFFFFF", text: "#000000", subText: "#6e6e73", border: "#d1d1d6", inputBg: "#F2F2F7" };
 
   useEffect(() => {
@@ -136,24 +136,23 @@ export default function Home() {
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser); 
       setLoading(false);
-      setUserTier("FREE"); 
+      setUserTier("FREE"); // 기본값 초기화
 
       if (currentUser) {
+        // 🔥 1. 유저 DB 확인 및 신규 가입자 등록
         const userRef = doc(db, "users", currentUser.uid);
         const userSnap = await getDoc(userRef);
 
         if (!userSnap.exists()) {
-           await setDoc(userRef, { 
-             uid: currentUser.uid, 
-             email: currentUser.email, // 🔥 이제 파이어베이스 콘솔에서 이메일이 바로 보입니다.
-             tier: "FREE", 
-             createdAt: new Date().toISOString() 
-           });
+           // 신규 로그인 유저 -> DB에 'FREE' 등급으로 생성
+           await setDoc(userRef, { email: currentUser.email, tier: "FREE", createdAt: new Date().toISOString() });
            setUserTier("FREE");
         } else {
+           // 기존 유저 -> DB에서 등급 가져오기
            setUserTier(userSnap.data().tier || "FREE");
         }
 
+        // 2. 기존 매수 기록 불러오기
         const q = query(collection(db, "trades"), where("uid", "==", currentUser.uid), orderBy("date", "desc"));
         const unsubscribeDb = onSnapshot(q, (snapshot) => { setTradeHistory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); });
         return () => unsubscribeDb();
@@ -205,18 +204,13 @@ export default function Home() {
   
   const executedRounds = myTrades.map(t => t.round);
   const currentRound = executedRounds.length > 0 ? Math.max(...executedRounds) : 0;
-const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
+  const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
   const nextTargetPrice = nextPlan ? nextPlan.targetPrice : null;
-
-  // 🔥 PRO 전략 적용 시뮬레이션 수치
-  const finalFreeAvg = buyPlan.length > 0 ? buyPlan[buyPlan.length - 1].expectedAvg : 0;
-  const proAvg = finalFreeAvg * 0.944;
 
   const updateStockSetting = (key, value) => { setStockSettings(prev => ({ ...prev, [symbol]: { ...prev[symbol], [key]: Number(value) } })); };
 
   const toggleExecution = async (planItem) => {
-    // 🔥 비회원일 경우 명확한 알림창 노출
-    if (!user) { alert("기록 저장은 로그인 후 가능합니다."); return; }
+    if (!user) { alert("로그인이 필요합니다."); return; }
     if (planItem.isExecuted) { alert("이미 실행된 회차입니다."); return; }
     if (confirm(`${symbol} ${planItem.turn}회차 (목표가: ${Math.floor(planItem.targetPrice).toLocaleString()}) 기록하시겠습니까?`)) {
       try { await addDoc(collection(db, "trades"), { uid: user.uid, symbol: symbol, type: "buy", round: planItem.turn, amount: Math.floor(planItem.amount), price: Number(planItem.targetPrice.toFixed(2)), qty: Number(planItem.expectedQty.toFixed(4)), date: new Date().toISOString(), memo: "자동등록됨" }); } catch (e) { alert("저장 실패"); }
@@ -238,6 +232,7 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
 
   return (
     <>
+      {/* ✨ CSS Grid 레이아웃 적용 (핵심 변경사항) */}
       <style>{`
         .responsive-layout { 
           display: grid; 
@@ -246,6 +241,7 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
           max-width: 1200px; 
           margin: 0 auto; 
           padding: 20px; 
+          /* 모바일 순서: 컨트롤(위) -> 메인표(중간) -> 차트(아래) */
           grid-template-areas: 
             "controls" 
             "main" 
@@ -262,6 +258,7 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
             align-items: start;
             column-gap: 20px; 
             row-gap: 5px;
+            /* PC 순서: 컨트롤(좌상단), 차트(좌하단) / 메인표(우측전체) */
             grid-template-areas: 
               "controls main" 
               "chart main"; 
@@ -273,7 +270,7 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
 
       <div className="responsive-layout" style={{ fontFamily: '-apple-system, sans-serif' }}>
         
-        {/* ================= 1. 컨트롤 영역 ================= */}
+        {/* ================= 1. 컨트롤 영역 (모바일 상단 / PC 좌상단) ================= */}
         <div className="grid-controls">
           <div style={styles.gaugeSection}>
                <div style={{ textAlign: 'center', fontSize: 13, fontWeight: 'bold', color: theme.text, marginTop: 5 }}>
@@ -318,13 +315,13 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
           </div>
         </div>
 
-        {/* ================= 2. 메인 표 영역 ================= */}
+        {/* ================= 2. 메인 표 영역 (모바일 중간 / PC 우측) ================= */}
         <div className="grid-main">
           <div style={styles.section}>
             <div style={{ display: 'flex', justifyContent: 'space-between', backgroundColor: theme.bg, padding: '10px 15px', borderRadius: 8, marginBottom: 15, fontSize: 12, border: `1px solid ${theme.border}` }}>
-                <div style={{textAlign: 'center'}}><div style={{color: theme.subText, marginBottom: 2}}>진입 회차</div><div style={{fontWeight: 'bold', color: theme.text}}>{!user ? "-" : `${currentRound}차 완료`}</div></div>
-                <div style={{textAlign: 'center'}}><div style={{color: theme.subText, marginBottom: 2}}>누적 평단가</div><div style={{fontWeight: 'bold', color: '#30d158'}}>{!user ? "-" : (realAvgPrice > 0 ? `$${realAvgPrice.toLocaleString(undefined, {maximumFractionDigits:2})}` : "-")}</div></div>
-                <div style={{textAlign: 'center'}}><div style={{color: theme.subText, marginBottom: 2}}>다음 진입가</div><div style={{fontWeight: 'bold', color: '#ff453a'}}>{!user ? "-" : (nextTargetPrice > 0 ? `$${nextTargetPrice.toLocaleString(undefined, {maximumFractionDigits:1})}` : "대기")}</div></div>
+                <div style={{textAlign: 'center'}}><div style={{color: theme.subText, marginBottom: 2}}>진입 회차</div><div style={{fontWeight: 'bold', color: theme.text}}>{currentRound}차 완료</div></div>
+                <div style={{textAlign: 'center'}}><div style={{color: theme.subText, marginBottom: 2}}>누적 평단가</div><div style={{fontWeight: 'bold', color: '#30d158'}}>{realAvgPrice > 0 ? `$${realAvgPrice.toLocaleString(undefined, {maximumFractionDigits:2})}` : "-"}</div></div>
+                <div style={{textAlign: 'center'}}><div style={{color: theme.subText, marginBottom: 2}}>다음 진입가</div><div style={{fontWeight: 'bold', color: '#ff453a'}}>{nextTargetPrice > 0 ? `$${nextTargetPrice.toLocaleString(undefined, {maximumFractionDigits:1})}` : "대기"}</div></div>
             </div>
 
             <div style={{...styles.sectionHeader, marginBottom: 10}}><h3 style={{color: theme.text}}>📉 매수 플랜 상세</h3></div>
@@ -335,15 +332,14 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
                         <div style={{width:40}}>실행</div><div style={{width:50}}>회차</div><div style={{width:60}}>하락%</div><div style={{width:80, color:'#81b0ff'}}>목표가</div><div style={{width:50}}>비중</div><div style={{width:100, textAlign:'right'}}>매수금액</div><div style={{width:80, textAlign:'right', color: theme.subText}}>예상평단</div>
                     </div>
                     
-                    {buyPlan.map((plan, index) => {
-                        {/* 🔥 블러 처리 삭제: 누구나 10차까지 선명하게 볼 수 있음 */}
-                        const rowStyle = plan.isExecuted ? styles.rowExecuted : styles.row;
+                        {buyPlan.map((plan, index) => {
+                        const isBlurred = userTier !== 'PRO' && index >= 2;
+                        const baseStyle = plan.isExecuted ? styles.rowExecuted : styles.row;
+                        const rowStyle = isBlurred ? { ...baseStyle, filter: 'blur(5px)', opacity: 0.3, pointerEvents: 'none', userSelect: 'none' } : baseStyle;
 
                         return (
                             <div key={plan.turn} style={rowStyle}>
-                                <div style={{width:40}}>
-                                    <input type="checkbox" checked={plan.isExecuted} onChange={() => toggleExecution(plan)} style={{cursor: 'pointer', width: '20px', height: '20px', accentColor: '#30d158'}} />
-                                </div>
+                                <div style={{width:40}}><input type="checkbox" checked={plan.isExecuted} onChange={() => toggleExecution(plan)} style={{cursor: 'pointer', width: '20px', height: '20px', accentColor: '#30d158'}} /></div>
                                 <div style={{width:50, color: theme.text}}>{plan.turn}차</div>
                                 <div style={{width:60, color:'#ff453a'}}>{(plan.dropRate * 100).toFixed(0)}%</div>
                                 <div style={{width:80, color:'#81b0ff', fontWeight:'bold'}}>{plan.targetPrice > 0 ? plan.targetPrice.toLocaleString(undefined, {maximumFractionDigits:1}) : "-"}</div>
@@ -356,6 +352,12 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
                             </div>
                         )
                     })}
+
+                    {userTier !== 'PRO' && (
+                        <div style={{ position: 'absolute', top: '110px', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '30px', zIndex: 10, background: 'rgba(255, 255, 255, 0.2)' }}>
+                            <button onClick={handleLogin} style={{ padding: '12px 24px', backgroundColor: '#ff9500', color: 'white', border: 'none', borderRadius: '25px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.15)' }}>🔒 PRO 등급 활성화하고 전체 플랜 보기</button>
+                        </div>
+                    )}
                 </div>
             </div>
             
@@ -364,53 +366,7 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
                  <span style={{fontSize:18, color:'#30d158'}}>{user ? totalInvested.toLocaleString() : 0} 원</span>
             </div>
 
-            {/* 🔥 1. 비회원 전용: 기록 저장 로그인 유도 뷰 */}
-            {!user && (
-                <div style={{ textAlign: 'center', backgroundColor: '#fff3cd', padding: '12px', borderRadius: 8, marginTop: 15, border: '1px solid #ffeeba', cursor: 'pointer' }} onClick={handleLogin}>
-                    <span style={{color: '#856404', fontSize: 13, fontWeight: 'bold'}}>🔒 기록 저장 및 나의 세팅을 유지하려면 로그인하세요. (무료)</span>
-                </div>
-            )}
-
-            {/* 🔥 2. 비회원 & FREE 회원 공통: PRO 전략 엔진 티저 박스 */}
-            {userTier !== 'PRO' && (
-                <div style={{ backgroundColor: '#f5f3ff', padding: '18px', borderRadius: 8, marginTop: 15, border: '1px solid #ddd6fe', cursor: 'pointer' }} onClick={() => !user ? handleLogin() : alert('PRO 결제 안내 페이지로 이동합니다.')}>
-                    <div style={{ fontSize: 15, color: '#6d28d9', fontWeight: 'bold', marginBottom: 10 }}>
-                        💎 PRO 전략 엔진 활성화 🔒
-                    </div>
-                    <div style={{ fontSize: 13, color: '#4c1d95', marginBottom: 12, lineHeight: '1.6' }}>
-                        • 하락장 자동 방어<br/>
-                        • 상승장 자동 비율 조정
-                    </div>
-
-                    {/* 🔥 비회원 (로그인 전): 실제 방어 차이 확인으로 호기심 자극 */}
-                    {!user && (
-                        <div style={{ backgroundColor: 'rgba(255,255,255,0.5)', padding: '12px', borderRadius: 6, marginBottom: 10, textAlign: 'center' }}>
-                            <div style={{ fontSize: 12, color: '#8b5cf6', fontWeight: 'bold' }}>
-                                🔒 로그인하면 실제 방어 차이 즉시 확인
-                            </div>
-                        </div>
-                    )}
-                    
-                    {/* 🔥 로그인한 FREE 회원: 추가 방어 확보라는 감정적 베네핏 강조 */}
-                    {user && (
-                        <div style={{ backgroundColor: 'rgba(255,255,255,0.5)', padding: '10px', borderRadius: 6, marginBottom: 10 }}>
-                            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>
-                                📊 현재 기본 전략 예상 평단 : <span style={{fontWeight: 'bold', color: theme.text}}>${finalFreeAvg.toLocaleString(undefined, {maximumFractionDigits:2})}</span>
-                            </div>
-                            <div style={{ fontSize: 12, color: '#8b5cf6', fontWeight: 'bold' }}>
-                                ✨ PRO 전략 적용 시 평단 : ${proAvg.toLocaleString(undefined, {maximumFractionDigits:2})} (↓ 5.6% 추가 방어 확보)
-                            </div>
-                        </div>
-                    )}
-
-                    <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 'bold', textAlign: 'right' }}>
-                        {!user ? "👉 로그인 후 실제 전략 비교 가능" : "👉 폭락장 자동 방어 모드 켜기"}
-                    </div>
-                </div>
-            )}
-
-            {/* 🔥 3. 시스템 철학 안내 (간격을 30px로 띄워서 PRO 박스와 시각적 분리) */}
-            <div style={{ textAlign: 'center', fontSize: 12, fontWeight: 'bold', color: '#166534', backgroundColor: '#dcfce7', padding: '10px', borderRadius: 8, marginTop: 30, border: '1px solid #bbf7d0' }}>
+            <div style={{ textAlign: 'center', fontSize: 12, fontWeight: 'bold', color: '#166534', backgroundColor: '#dcfce7', padding: '10px', borderRadius: 8, marginTop: 15 }}>
                 💡 하락장 누적 평단가를 최대 60%까지 낮추도록 설계된 시스템입니다.
             </div>
           </div>
@@ -442,7 +398,7 @@ const nextPlan = buyPlan.find(p => p.turn === currentRound + 1);
           </div>
         </div>
 
-        {/* ================= 3. 차트 영역 ================= */}
+        {/* ================= 3. 차트 영역 (모바일 최하단 / PC 좌하단) ================= */}
         <div className="grid-chart">
           <TradingViewChart theme={theme} />
           <div style={{ textAlign: 'center', fontSize: 11, color: theme.subText, marginTop: 8 }}>※ 본 차트는 Invesco QQQ ETF의 15분 지연 데이터입니다.</div>
